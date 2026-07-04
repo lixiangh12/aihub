@@ -1,0 +1,33 @@
+name: 每日趋势数据记录
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  record-trends:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: |
+          npm ci
+          npx prisma generate
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+      - name: SSH Tunnel
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh -f -N -L 5433:localhost:5432 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+          sleep 2
+      - run: npx tsx src/scripts/record-daily-trends.ts
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+      - if: always()
+        run: pkill -f "ssh.*5433:localhost" 2>/dev/null || true

@@ -1,0 +1,83 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Backups
+*.bak
+
+# Environment variables
+.env
+.env.local
+.env.bak
+.env.development
+.env.production
+
+# Database
+prisma/dev.db
+prisma/dev.db-journal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+tsconfig.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# Temp / debug files
+tmp-*
+tmp_*
+_tmp_*
+test-*.txt
+test*-*.txt
+rss-*.txt
+rss-*.js
+rss-*.bat
+run-rss.bat
+node-*.txt
+node-*.err
+
+# Audit / analysis reports
+AUDIT_REPORT_*.md
+full-audit.js
+
+# Migration helper scripts
+fix-*.py
+export-*.py
+migrate-*.sql
+full-migrate.sql
+
+# WorkBuddy / CodeBuddy metadata
+.workbuddy/
+.codebuddy/
+
+# Non-functional docs / reports / drafts
+*.docx
+overview.md
+ai999999_top_*.md
+docs/devto-*
+docs/zhihu_article*
+docs/*计划*.md
+docs/*指南*.md
+docs/*审计*.md
+docs/requirements.txt
+build.log
+
+# Article drafts (not project code)
+docs/
+.env
+seed_data.ts

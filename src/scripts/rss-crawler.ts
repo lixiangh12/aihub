@@ -1,0 +1,312 @@
+import { PrismaClient } from '@prisma/client'
+import Parser from 'rss-parser'
+import slugify from 'slugify'
+
+const prisma = new PrismaClient()
+const rssParser = new Parser({
+  timeout: 30000,
+  headers: {
+    'User-Agent': 'AI-Hub-RSS-Crawler/1.0'
+  }
+})
+
+// 调用腾讯翻译 API 翻译摘要
+async function translateSummary(text: string): Promise<string> {
+  const secretId = process.env.TENCENT_TRANSLATE_SECRET_ID
+  const secretKey = process.env.TENCENT_TRANSLATE_SECRET_KEY
+  
+  // 使用腾讯云翻译 API 翻译摘要
+  if (!secretId || !secretKey) {
+    return ''
+  }
+  
+  try {
+    // 使用腾讯云 SDK（tsx/ESM 下兼容 CJS 模块）
+    const tmtModule = await import('tencentcloud-sdk-nodejs-tmt')
+    const tencentcloud = tmtModule.default || tmtModule
+    const TmtClient = tencentcloud.tmt.v20180321.Client
+    
+    const clientConfig = {
+      credential: {
+        secretId: secretId,
+        secretKey: secretKey,
+      },
+      region: 'ap-guangzhou',
+      profile: {
+        signMethod: 'TC3-HMAC-SHA256',
+        httpProfile: {
+          reqMethod: 'POST',
+          reqTimeout: 30,
+        },
+      },
+    }
+    
+    const client = new TmtClient(clientConfig)
+    
+    const params = {
+      SourceText: text,
+      Source: 'en',
+      Target: 'zh',
+      ProjectId: 0,
+    }
+    
+    const result = await client.TextTranslate(params)
+    return result.TargetText || ''
+  } catch (error) {
+    console.error('腾讯翻译失败:', error)
+    // 翻译失败时返回空，保留原文
+    return ''
+  }
+}
+
+// AI 资讯 RSS 源列表（精选有实质内容的源）
+const rssSources = [
+  // === 中文源 ===
+  {
+    name: '量子位',
+    url: 'https://www.qbitai.com/rss',
+    language: 'zh',
+    category: 'AI新闻'
+  },
+  // === 英文源（自动翻译）===
+  {
+    name: 'MarkTechPost',
+    url: 'https://www.marktechpost.com/feed/',
+    language: 'en',
+    category: 'AI新闻'
+  },
+  {
+    name: 'TechCrunch AI',
+    url: 'https://techcrunch.com/category/artificial-intelligence/feed/',
+    language: 'en',
+    category: 'AI新闻'
+  },
+  {
+    name: 'Ars Technica AI',
+    url: 'https://arstechnica.com/tag/artificial-intelligence/feed/',
+    language: 'en',
+    category: '科技新闻'
+  },
+  {
+    name: 'The Verge AI',
+    url: 'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml',
+    language: 'en',
+    category: '科技新闻'
+  },
+  {
+    name: 'OpenAI Blog',
+    url: 'https://openai.com/news/rss.xml',
+    language: 'en',
+    category: '技术博客'
+  },
+  {
+    name: 'Google AI Blog',
+    url: 'https://blog.google/technology/ai/rss/',
+    language: 'en',
+    category: '技术博客'
+  },
+  {
+    name: 'Hacker News',
+    url: 'https://news.ycombinator.com/rss',
+    language: 'en',
+    category: '科技新闻'
+  },
+  {
+    name: 'Product Hunt',
+    url: 'https://www.producthunt.com/feed',
+    language: 'en',
+    category: '产品动态'
+  },
+  {
+    name: 'The Gradient',
+    url: 'https://thegradient.pub/rss/',
+    language: 'en',
+    category: '深度分析'
+  },
+  {
+    name: 'Ahead of AI',
+    url: 'https://magazine.sebastianraschka.com/feed',
+    language: 'en',
+    category: '技术博客'
+  },
+  {
+    name: 'Last Week in AI',
+    url: 'https://lastweekin.ai/feed',
+    language: 'en',
+    category: 'AI新闻'
+  },
+]
+
+// 生成唯一 slug
+function generateSlug(title: string, date: Date): string {
+  const dateStr = date.toISOString().split('T')[0].replace(/-/g, '')
+  const titleSlug = slugify(title.slice(0, 50), { lower: true, strict: true })
+  return `${dateStr}-${titleSlug}`
+}
+
+// 清理 HTML 标签（先删除代码块内容，再去标签）
+function stripHtml(html: string): string {
+  return html
+    // 先删除代码块整体（包含内容）
+    .replace(/<pre[^>]*>[\s\S]*?<\/pre>/gi, '')
+    .replace(/<code[^>]*>[\s\S]*?<\/code>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    // 段落/换行转空格
+    .replace(/<\/?(p|br|li|h[1-6]|div|blockquote)[^>]*>/gi, ' ')
+    // 去掉所有剩余标签
+    .replace(/<[^>]*>/g, '')
+    // 处理 HTML 实体
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#\d+;/g, '')
+    // 清理多余空白
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// 生成摘要
+function generateSummary(content: string, maxLength: number = 150): string {
+  const text = stripHtml(content)
+  if (text.length <= maxLength) return text
+  return text.slice(0, maxLength).replace(/\s+\S*$/, '') + '...'
+}
+
+// 抓取单个 RSS 源
+async function fetchRSS(source: typeof rssSources[0]): Promise<number> {
+  console.log(`📡 正在抓取: ${source.name}...`)
+  
+  try {
+    const feed = await rssParser.parseURL(source.url)
+    let imported = 0
+    let skipped = 0
+    
+    // 只取最近 7 天的文章，最多 10 篇
+    const oneWeekAgo = new Date()
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7)
+    
+    const recentItems = (feed.items || [])
+      .filter(item => {
+        const pubDate = item.pubDate ? new Date(item.pubDate) : new Date()
+        return pubDate >= oneWeekAgo
+      })
+      .slice(0, 10)
+    
+    for (const item of recentItems) {
+      try {
+        const title = item.title?.trim() || ''
+        // 优先取完整 HTML 内容，再取纯文本内容
+        const rawContent = item['content:encoded'] || item.content || item.summary || ''
+        const plainContent = item.contentSnippet || item.summary || ''
+        const link = item.link || ''
+        const pubDate = item.pubDate ? new Date(item.pubDate) : new Date()
+        
+        if (!title || !link) {
+          skipped++
+          continue
+        }
+        
+        // 生成 slug
+        const slug = generateSlug(title, pubDate)
+        
+        // 检查是否已存在
+        const existing = await prisma.news.findUnique({
+          where: { slug }
+        })
+        
+        if (existing) {
+          skipped++
+          continue
+        }
+        
+        // 摘要取较长版本（优先用 content:encoded 的纯文本，最长 800 字）
+        const summary = generateSummary(rawContent || plainContent, 800)
+        
+        // 英文内容生成中文翻译（标题+摘要）
+        let titleZh = null
+        let summaryZh = null
+        if (source.language === 'en') {
+          console.log(`   🔄 翻译: ${title.slice(0, 30)}...`)
+          // 翻译标题
+          titleZh = await translateSummary(title)
+          // 翻译摘要
+          if (summary) {
+            summaryZh = await translateSummary(summary)
+          }
+          if (titleZh) {
+            console.log(`   ✅ 翻译完成`)
+          }
+        }
+        
+        // 创建新闻
+        // 原文内容存纯文本版本，展示用 summary 和 summaryZh
+        const cleanContent = stripHtml(rawContent || plainContent) || title
+        
+        await prisma.news.create({
+          data: {
+            title,
+            titleZh,
+            slug,
+            summary,
+            summaryZh,
+            content: cleanContent.length > 100 ? cleanContent.slice(0, 2000) : cleanContent,
+            sourceName: source.name,
+            sourceUrl: link,
+            publishedAt: pubDate,
+            isAutoCrawled: true,
+            viewCount: 0
+          }
+        })
+        
+        imported++
+        process.stdout.write('.')
+      } catch (error) {
+        skipped++
+        process.stdout.write('x')
+      }
+    }
+    
+    console.log(`\n   ✅ 导入: ${imported}, ⏭️ 跳过: ${skipped}`)
+    return imported
+  } catch (error) {
+    console.error(`\n   ❌ 抓取失败:`, (error as Error).message)
+    return 0
+  }
+}
+
+// 主函数
+async function main() {
+  console.log('🚀 开始抓取 AI 资讯 RSS...\n')
+  console.log(`📅 时间: ${new Date().toLocaleString('zh-CN')}`)
+  console.log(`📊 共 ${rssSources.length} 个 RSS 源\n`)
+  
+  let totalImported = 0
+  
+  for (const source of rssSources) {
+    const count = await fetchRSS(source)
+    totalImported += count
+    console.log('')
+  }
+  
+  // 统计
+  const totalNews = await prisma.news.count()
+  const autoCrawled = await prisma.news.count({
+    where: { isAutoCrawled: true }
+  })
+  
+  console.log('\n📊 抓取完成:')
+  console.log(`   本次新增: ${totalImported} 篇文章`)
+  console.log(`   资讯总数: ${totalNews} 篇`)
+  console.log(`   自动抓取: ${autoCrawled} 篇`)
+  
+  await prisma.$disconnect()
+}
+
+main().catch(async (e) => {
+  console.error(e)
+  await prisma.$disconnect()
+  process.exit(1)
+})

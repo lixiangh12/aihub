@@ -1,0 +1,88 @@
+name: 🤖 每日自动抓取 AI Hub
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: |
+          PUPPETEER_SKIP_DOWNLOAD=true npm ci
+          npx prisma generate
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+
+      - name: 建立 SSH 隧道到数据库
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh -f -N -L 5433:localhost:5432 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} -o ServerAliveInterval=60
+          echo "SSH tunnel established ✓"
+
+      - name: 测试连接
+        run: |
+          sleep 2
+          timeout 5 bash -c 'echo > /dev/tcp/localhost/5433' && echo "Port 5433 open ✓" || echo "Port check failed"
+
+      - name: 安装翻译依赖
+        run: pip install tencentcloud-sdk-python -q
+
+      - name: 抓取 Product Hunt + GitHub 热门
+        run: npx tsx src/scripts/crawler.ts 2>&1
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+
+      - name: 抓取 GitHub AI 开源项目
+        run: npx tsx src/scripts/github-trending-crawler.ts 2>&1
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+
+      - name: 抓取 RSS AI 资讯
+        run: npx tsx src/scripts/rss-crawler.ts 2>&1
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+          TENCENT_TRANSLATE_SECRET_ID: ${{ secrets.TENCENT_TRANSLATE_SECRET_ID }}
+          TENCENT_TRANSLATE_SECRET_KEY: ${{ secrets.TENCENT_TRANSLATE_SECRET_KEY }}
+
+      - name: 抓取最新 AI 工具
+        run: npx tsx src/scripts/latest-tools-crawler.ts 2>&1
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+          TENCENT_TRANSLATE_SECRET_ID: ${{ secrets.TENCENT_TRANSLATE_SECRET_ID }}
+          TENCENT_TRANSLATE_SECRET_KEY: ${{ secrets.TENCENT_TRANSLATE_SECRET_KEY }}
+
+      - name: 抓取 IT之家开源项目
+        run: npx tsx src/scripts/itc-crawler.ts 2>&1
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+
+      - name: 记录每日趋势
+        run: npx tsx src/scripts/record-daily-trends.ts 2>&1
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+
+      - name: 清理过期资讯
+        run: npx tsx src/scripts/clean-old-news.ts 2>&1
+        env:
+          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5433/aihub
+
+      - name: 关闭 SSH 隧道
+        if: always()
+        run: pkill -f "ssh.*5433:localhost" 2>/dev/null || true

@@ -1,0 +1,28 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /login
+Disallow: /register
+Disallow: /forgot-password
+Disallow: /notification
+Disallow: /user-center
+Disallow: /u/*/settings
+Disallow: /*?tab=
+Disallow: /*?filter=
+Disallow: /*?page=
+Disallow: /*?status=
+Disallow: /*?source=
+Disallow: /*?sort=
+
+# 爬取礼貌：每请求间隔 10 秒
+Crawl-Delay: 10
+
+# 搜索引擎通用规则
+User-agent: Bingbot
+Crawl-Delay: 10
+
+User-agent: Googlebot
+Crawl-Delay: 10
+
+Sitemap: https://ai999999.top/sitemap.xml

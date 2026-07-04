@@ -1,0 +1,36 @@
+name: IndexNow 流式推送
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - '.github/workflows/**'
+      - '.vercelignore'
+  workflow_dispatch:
+
+jobs:
+  indexnow-submit:
+    runs-on: ubuntu-latest
+    continue-on-error: true  # 无密钥时不阻塞部署
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装依赖
+        run: |
+          npm ci
+          npx prisma generate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: 📤 提交 IndexNow
+        run: npx tsx scripts/submit-indexnow.ts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
